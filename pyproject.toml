@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "abstain-bench"
-version = "0.1.0"
+version = "0.1.1"
 description = "How often does a verifier claim success on input it cannot check? A benchmark for unearned passes."
 readme = "README.md"
 requires-python = ">=3.9"

@@ -27,8 +27,18 @@ from abstain_bench.stats import betainc, clopper_pearson
 PY = sys.executable
 ALWAYS_PASS = f"{PY} -c 'import sys; sys.exit(0)'"
 ALWAYS_FAIL = f"{PY} -c 'import sys; sys.exit(1)'"
-EXAMPLE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                       "examples", "vacuous_checker.py")
+# THE MODULE FORM, DELIBERATELY -- and this line is the whole point of the fix.
+#
+# This used to build an ABSOLUTE PATH to examples/vacuous_checker.py. Every test below then
+# passed, including the one asserting the README's worked example reproduces, WHILE THE
+# README'S ACTUAL COMMAND WAS BROKEN FOR EVERY READER: the file was outside `src/` so it never
+# shipped in the wheel, and `score` runs each subject with cwd set to the case's temp
+# directory, so the README's relative path could not resolve even inside a clone.
+#
+# The numbers were right the whole time. The test verified the NUMBERS and never the COMMAND,
+# and an absolute path constructed in the test is exactly what hid the difference. Running the
+# same module invocation the README prints is what closes that gap.
+EXAMPLE_SUBJECT = f"{PY} -m abstain_bench.examples.vacuous_checker {{input}}"
 
 
 # ------------------------------------------------------------------ the benchmark on itself
@@ -102,7 +112,7 @@ def test_a_correct_abstaining_verifier_scores_zero_with_no_findings():
 def test_the_shipped_example_scores_nonzero_and_names_the_empty_case():
     """The example is deliberately vacuous. If it ever scores 0 the benchmark has stopped
     detecting the single most common bug in this class of tool."""
-    rep = score("vacuous", f"{PY} {json.dumps(EXAMPLE)} {{input}}")
+    rep = score("vacuous", EXAMPLE_SUBJECT)
     assert rep.verdict == "SCORED", rep.control_failures
     assert rep.unearned >= 1
     names = {o.case.name for o in rep.scored_outcomes if o.outcome == CLAIMED_PASS}
@@ -114,7 +124,7 @@ def test_the_shipped_example_scores_nonzero_and_names_the_empty_case():
 def test_only_families_the_subject_demonstrated_are_scored():
     """A graph checker refusing a truncated hash chain has refused for the wrong reason and
     would collect a free correct answer. Family scoping is what stops that inflating the score."""
-    rep = score("vacuous", f"{PY} {json.dumps(EXAMPLE)} {{input}}")
+    rep = score("vacuous", EXAMPLE_SUBJECT)
     assert rep.families == [GRAPH]
     fams = {o.case.family for o in rep.scored_outcomes}
     assert fams <= {GRAPH, ANY}
@@ -123,7 +133,7 @@ def test_only_families_the_subject_demonstrated_are_scored():
 
 def test_a_negative_control_outside_the_subjects_families_does_not_abstain_it():
     """Passing a broken chain is damning for a chain verifier and meaningless for a graph one."""
-    rep = score("vacuous", f"{PY} {json.dumps(EXAMPLE)} {{input}}")
+    rep = score("vacuous", EXAMPLE_SUBJECT)
     assert rep.verdict == "SCORED"
     assert CHAIN not in rep.families
 
@@ -241,14 +251,14 @@ def test_cli_score_exit_codes_follow_the_portfolio_dialect():
     assert ok.returncode == 2, "no score established must exit 2"
 
     bad = subprocess.run([PY, "-m", "abstain_bench.cli", "score",
-                          "--subject", f"{PY} {json.dumps(EXAMPLE)} {{input}}"],
+                          "--subject", EXAMPLE_SUBJECT],
                          capture_output=True, text=True)
     assert bad.returncode == 1, "at least one unearned pass must exit 1"
 
 
 def test_cli_json_and_text_agree_on_the_verdict():
     args = [PY, "-m", "abstain_bench.cli", "score", "--subject",
-            f"{PY} {json.dumps(EXAMPLE)} {{input}}"]
+            EXAMPLE_SUBJECT]
     text = subprocess.run(args, capture_output=True, text=True)
     js = subprocess.run(args + ["--json"], capture_output=True, text=True)
     assert text.returncode == js.returncode
@@ -265,7 +275,7 @@ def test_cli_corpus_marks_the_unscored_categories_clearly():
 
 
 def test_json_carries_the_limits():
-    rep = score("vacuous", f"{PY} {json.dumps(EXAMPLE)} {{input}}")
+    rep = score("vacuous", EXAMPLE_SUBJECT)
     d = rep.to_dict()
     assert d["does_not_prove"]
     assert d["ci95_clopper_pearson"]
@@ -301,7 +311,7 @@ def test_every_documented_count_matches_the_live_corpus():
 
 def test_the_readme_worked_example_matches_a_real_run():
     """The console block in the README is a claim about what the shipped example prints."""
-    rep = score("vacuous", f"{PY} {json.dumps(EXAMPLE)} {{input}}")
+    rep = score("vacuous", EXAMPLE_SUBJECT)
     readme = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                "README.md"), encoding="utf-8").read()
     assert f"{rep.unearned}/{rep.n} = {rep.rate:.1%}" in readme, (
@@ -311,6 +321,41 @@ def test_the_readme_worked_example_matches_a_real_run():
     assert f"[{lo:.1%}, {hi:.1%}]" in readme
 
 
+def test_the_readme_command_is_the_command_the_tests_run():
+    """The gap that let a broken worked example ship, closed.
+
+    The test above verifies the README's NUMBERS against a real run, and it passed for the entire
+    life of the package while `abstain-bench score --subject 'python3 examples/vacuous_checker.py
+    {input}'` — the command the README actually printed — failed for every reader with exit 2. It
+    passed because the test built its own absolute path to the example instead of running what the
+    README says. Verifying the output of a command you did not run is not verifying the command.
+
+    So: the subject string in the README must be the subject string these tests use. Not
+    equivalent to it, not a path to the same file — the same string.
+    """
+    readme = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "README.md"), encoding="utf-8").read()
+    documented = "python3 -m abstain_bench.examples.vacuous_checker {input}"
+    assert documented in readme, (
+        f"the README no longer documents {documented!r}; if the invocation changed, this test and "
+        f"EXAMPLE_SUBJECT must change with it")
+    # EXAMPLE_SUBJECT differs only in naming THIS interpreter rather than a bare `python3`, which
+    # is what makes the tests run under tox/CI pythons. Everything after it must be identical.
+    assert EXAMPLE_SUBJECT.endswith(documented[len("python3 "):]), (
+        f"tests run {EXAMPLE_SUBJECT!r} but the README documents {documented!r} — the exact "
+        f"divergence that hid the last defect")
+
+
+def test_the_example_ships_inside_the_package():
+    """It used to live in a top-level `examples/`, outside `src/`, so `pip install abstain-bench`
+    did not include it. The README told PyPI users to run a file they did not have. Importability
+    is the check that this cannot silently regress."""
+    import importlib.util
+    assert importlib.util.find_spec("abstain_bench.examples.vacuous_checker") is not None, (
+        "the worked example is not importable from the installed package; if it moved back "
+        "outside src/, every PyPI reader's copy of the README is broken again")
+
+
 def test_concurrency_never_changes_a_verdict():
     """Cases run on a thread pool (32 subprocess spawns; roughly 2-3x; the RATIO is load-dependent, the ~0.5s parallel time is not).
 
@@ -318,7 +363,7 @@ def test_concurrency_never_changes_a_verdict():
     looking at, so parallelism cannot change an individual outcome — but that is an argument, and
     an argument about concurrency is worth checking rather than believing.
     """
-    for cmd in (f"{PY} {json.dumps(EXAMPLE)} {{input}}", ALWAYS_FAIL, ALWAYS_PASS):
+    for cmd in (EXAMPLE_SUBJECT, ALWAYS_FAIL, ALWAYS_PASS):
         seq = score("s", cmd, jobs=1).to_dict()
         par = score("s", cmd, jobs=8).to_dict()
         assert json.dumps(seq, sort_keys=True) == json.dumps(par, sort_keys=True), (

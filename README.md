@@ -32,11 +32,12 @@ pass · **2** no score could be established.
 ## Worked example
 
 A deadlock checker that detects cycles perfectly and reports the empty graph as safe — because
-`any(...)` over zero nodes is `False`. It ships in `examples/vacuous_checker.py`:
+`any(...)` over zero nodes is `False`. It ships **inside the package**, so this runs from any
+directory once `abstain-bench` is installed:
 
 ```console
-$ abstain-bench score --subject 'python3 examples/vacuous_checker.py {input}'
-subject: python3 examples/vacuous_checker.py {input}
+$ abstain-bench score --subject 'python3 -m abstain_bench.examples.vacuous_checker {input}'
+subject: python3 -m abstain_bench.examples.vacuous_checker {input}
 
 unearned-pass rate  2/8 = 25.0%
 95% CI (exact)      [3.2%, 65.1%]   Clopper-Pearson
@@ -49,9 +50,21 @@ unearned-pass rate  2/8 = 25.0%
   claimed success on input it could not check:
     empty_json_object            an object with no members: there is no property here to check
     empty_graph                  no nodes: 'no cycle exists' is true and says nothing about your system
+
+  This does NOT prove:
+    - that a 0% unearned-pass rate makes a verifier correct — this measures one failure mode, not soundness; a tool can abstain perfectly and still be wrong about real inputs
+    - that the corpus is exhaustive; it covers six ways to have nothing to check, and there are certainly others
+    - anything about the subject's behaviour on VALID input beyond the three positive controls
 $ echo $?
 1
 ```
+
+> **Why `-m` and not a path.** `score` runs every subject with its working directory set to
+> that case's own temporary directory, so a *relative* path to a subject cannot resolve — and
+> the example used to live in a top-level `examples/`, outside `src/`, so it was not in the
+> wheel at all. The documented command was unrunnable both for anyone who `pip install`ed it
+> and for anyone standing in a clone. **The numbers above were never wrong; the command was.**
+> Run as a module, it works from anywhere.
 
 That one line — `any(...)` over an empty collection — is the most common bug in this entire class
 of tool, and it is invisible to every test written against non-empty input.
